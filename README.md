@@ -3,6 +3,10 @@ Put a local file into a note in specified Evernote notebook or vice versa.
 
 ## Requirement
 
+Evernote Developer Token (https://dev.evernote.com/doc/articles/dev_tokens.php) 
+
+  Any evernote user can apply for his own token. (https://www.evernote.com/api/DeveloperToken.action)
+
 Python 2.6 or 2.7 (official evernote-api only supports Python 2)
 
 
