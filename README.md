@@ -13,24 +13,30 @@ Python 2.6 or 2.7 (official evernote-api only supports Python 2)
 
 You can install via pip:
 
+```bash
 pip install easysettings evernote
-
+```
 
 ## Usage
 
 Make alias or put into PATH environment:
 
+```bash
 alias ensync="~/projects/remote.ensync/ensync"
-
+```
 
 ## Sample
 
 * put this file into configured notebook.
 
+```bash
   ensync put README.txt
+```
 
 * list all file
 
+```bash
   ensync list
+```
 
 
