@@ -8,8 +8,8 @@ Python 2.6 or 2.7 (official evernote-api only supports Python 2)
 
 ## Dependencies
 
-easysettings
-evernote
+* easysettings
+* evernote
 
 You can install via pip:
 
@@ -25,11 +25,11 @@ alias ensync="~/projects/remote.ensync/ensync"
 
 ## Sample
 
-put this file into configured notebook.
+* put this file into configured notebook.
 
   ensync put README.txt
 
-list all file
+* list all file
 
   ensync list
 
