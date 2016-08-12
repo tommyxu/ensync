@@ -1,0 +1,242 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import re
+import time
+import hashlib
+import binascii
+import argparse
+import mimetypes
+
+from evernote.api.client import EvernoteClient
+import evernote.edam.notestore.ttypes as NoteStoreTypes
+import evernote.edam.type.ttypes as Types
+
+from easysettings import EasySettings
+
+argparser = argparse.ArgumentParser()
+subparsers = argparser.add_subparsers(dest='op', help = 'primary note action')
+parser_put = subparsers.add_parser('put', help = 'put a localfile to remote');
+parser_put.add_argument('localfile', metavar='<local-file>')
+parser_list = subparsers.add_parser('list', help = 'list remote files with patterns');
+parser_list.add_argument('patterns', nargs='*', metavar='<name-pattern>')
+parser_get = subparsers.add_parser('get', help = 'get a file matching a pattern.')
+parser_get.add_argument('-o', '--overwrite', dest='overwrite', action='store_true', help='overwrite if exists')
+parser_get.add_argument('patterns', nargs='+', metavar='<name-pattern>')
+parser_tags = subparsers.add_parser('tags', help = 'list all tags')
+parser_notebooks = subparsers.add_parser('notebooks', help = 'list all notebooks')
+parser_settag = subparsers.add_parser('settag', help = 'create tag "ensync"')
+# parser_sync = subparsers.add_parser('sync', help = 'sync with the remote. check name and last modified time of a file')
+# parser_delete = subparsers.add_parser('delete', help = 'delete a file matching a pattern.')
+# parser_delete.add_argument('patterns', nargs='+', metavar='<name-pattern>')
+args = argparser.parse_args()
+
+class Main:
+
+    ENSYNC_TAG_NAME = 'ensync'
+    ENSYNC_VERSION = 'ensync-1.0'
+
+    SETTING_TAG_GUID = 'tag-guid'
+    SETTING_NOTEBOOK_GUID = 'notebook-guid'
+    SETTING_TOKEN = 'token'
+    SETTING_DOWNLOAD_FOLDER = 'download-to'
+
+    def __init__(self):
+        self.load_settings()
+
+    def load_settings(self):
+        self.settings = EasySettings(self.get_settings_location())
+        if not self.get_access_token() or not self.get_note_book_guid():
+            print('Initializing the config: {}'.format(self.get_settings_location()))
+            self.init_settings()
+
+    def init_settings(self):
+        token = raw_input('Developer Token: ')
+        if not token:
+            sys.exit(-1)
+        self.settings.set(self.SETTING_TOKEN, token)
+
+        print('Fetching notebooks ...')
+        notebooks = self.notebooks()
+        print('Choose a notebook as workspace to put or get files. Other notebooks are never touched.')
+        notebook_choice = raw_input('Notebook [{}-{}]: '.format(1, len(notebooks)))
+        if not notebook_choice:
+            sys.exit(-1)
+        self.settings.set(self.SETTING_NOTEBOOK_GUID, notebooks[int(notebook_choice)-1].guid)
+
+        DEFAULT_DOWNLOAD_FOLDER = '~/Downloads'
+        self.settings.set(self.SETTING_DOWNLOAD_FOLDER, DEFAULT_DOWNLOAD_FOLDER)
+        download_folder = raw_input('Download folder [ENTER to use {}]:'.format(DEFAULT_DOWNLOAD_FOLDER))
+        if not download_folder:
+            download_folder = DEFAULT_DOWNLOAD_FOLDER
+
+        self.settings.save()
+
+
+    def get_note_book(self):
+        notebook = self.get_note_store().getNotebook(self.get_note_book_guid())
+        return notebook
+
+    def get_note_book_guid(self):
+        return self.settings.get(self.SETTING_NOTEBOOK_GUID)
+
+    def get_tag_guid(self):
+        return self.settings.get(self.SETTING_TAG_GUID)
+
+    def get_download_folder(self):
+        path = self.settings.get(self.SETTING_DOWNLOAD_FOLDER)
+        if path.startswith('~'):
+            path =os.path.expanduser(path)
+        return path
+
+    def get_settings_location(self):
+        return os.path.expanduser('~/.ensync.conf')
+
+    def get_access_token(self):
+        return self.settings.get(self.SETTING_TOKEN)
+
+    def get_note_store(self):
+        client = EvernoteClient(token=self.get_access_token(), sandbox = False)
+        note_store = client.get_note_store()
+        return note_store
+
+    def settag(self, **args):
+        if not self.get_tag_guid():
+            tags = self.get_note_store().listTags()
+            for tag in tags:
+                if tag.name == self.ENSYNC_TAG_NAME:
+                    print('use tag [{}]'.format(tag.name))
+                    self.settings.set(self.SETTING_TAG_GUID, tag.guid)
+                    self.settings.save()
+                    break
+            if not self.get_tag_guid():
+                print('create tag [{}]'.format(tag.name))
+                tag = self.get_note_store().createTag(Types.Tag(name=Main.ENSYNC_TAG_NAME))
+                self.settings.set(self.SETTING_TAG_GUID, tag.guid)
+                self.settings.save()
+        else:
+            print('tag [{}] has already been configured.'.format(self.ENSYNC_TAG_NAME))
+
+    def init(self, **args):
+        self.init_settings()
+        self.init_tags()
+
+    def notebooks(self, **args):
+        notebooks = self.get_note_store().listNotebooks()
+        for (seq, notebook) in enumerate(notebooks):
+            print("[{}] {}\t{}".format(seq + 1, notebook.guid, notebook.name))
+        return notebooks
+
+
+    def tags(self, **args):
+        tags = self.get_note_store().listTags()
+        for tag in tags:
+            print("{1}\t{0}".format(tag.name, tag.guid))
+
+    def put(self, localfile, **args):
+        image = None
+        with open(localfile, 'rb') as fh:
+            image = fh.read()
+
+        md5 = hashlib.md5()
+        md5.update(image)
+        hashcode = md5.digest()
+
+        filemeta = {
+            'ensync_ver' : Main.ENSYNC_VERSION,
+            'filename' : os.path.basename(localfile),
+            'filesize' : os.path.getsize(localfile),
+            'filedate' : os.path.getmtime(localfile),
+            'filedate_text' : time.ctime(os.path.getmtime(localfile)),
+            'hashcode' : binascii.hexlify(hashcode),
+            'mimetype' : mimetypes.guess_type(localfile)[0]
+        }
+
+        data = Types.Data()
+        data.size = len(image)
+        data.bodyHash = hashcode
+        data.body = image
+
+        resource = Types.Resource()
+        resource.mime = filemeta['mimetype']
+        resource.data = data
+
+        resourceAttrs = Types.ResourceAttributes()
+        resourceAttrs.fileName = filemeta['filename']
+        resourceAttrs.timestamp = filemeta['filedate']
+        resourceAttrs.attachment = True
+        resource.attributes = resourceAttrs
+
+        note = Types.Note()
+        note.resources = [ resource ]
+        note.notebookGuid = self.get_note_book_guid()
+        note.content = """<?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">
+        <en-note>
+            <div>
+            <code>{filename}</code><br/>
+            <code>{hashcode}</code><br/>
+            <code>{filesize}</code><br/>
+            <code>{filedate_text}</code><br/>
+            <code>{filedate}</code><br/>
+            <code># provided by {ensync_ver}</code><br/>
+            </div>
+            <div>
+                <p></p>
+            </div>
+            <en-media alt="{filename}" hash="{hashcode}" type="{mimetype}" />
+        </en-note>
+        """
+        note.title = filemeta['filename']
+        note.content = note.content.format(**filemeta)
+        note.tagGuids = [ self.get_tag_guid() ] if self.get_tag_guid() else []
+
+        # print(note.content)
+        created_note = self.get_note_store().createNote(note)
+        print('note created. title: {}, guid: {}'.format(created_note.title, created_note.guid))
+
+    def list(self, patterns, **args):
+        notes_meta = self.find_notes_meta(patterns)
+        for note_meta in notes_meta:
+            print('{}\t{}\t{}\t{}'.format(note_meta.largestResourceSize, time.ctime(note_meta.created / 1000.0), note_meta.title, note_meta.guid))
+
+    def find_notes_meta(self, patterns):
+        noteFilter = NoteStoreTypes.NoteFilter(words=None, notebookGuid=self.get_note_book_guid()) # , tagGuids=[self.get_tag_guid()])
+        resultSpec = NoteStoreTypes.NotesMetadataResultSpec(True, True, True, True, True,
+                includeLargestResourceMime=True, includeLargestResourceSize=True)
+
+        notes_meta = self.get_note_store().findNotesMetadata(noteFilter, 0, 250, resultSpec)
+        filtered_note_meta = (note_meta for note_meta in notes_meta.notes if note_meta.largestResourceMime and (len(patterns) == 0 or
+            any((not pattern or (note_meta.guid.startswith(pattern) or re.match(pattern, note_meta.title))) for pattern in patterns)))
+        return filtered_note_meta
+
+    def get(self, patterns, overwrite, **args):
+        notes_meta = self.find_notes_meta(patterns)
+        for note_meta in notes_meta:
+            note_guid = note_meta.guid
+            note = self.get_note_store().getNote(note_guid, True, True, False, False)
+            fileResource = note.resources[0]
+            fileName = fileResource.attributes.fileName
+            fullFileName = os.path.join(self.get_download_folder(), fileName)
+            if overwrite or not os.path.exists(fullFileName):
+                with open(fullFileName, 'w') as fh:
+                    fh.write(fileResource.data.body)
+
+                fileTime = fileResource.attributes.timestamp
+                if fileTime:
+                    os.utime(fullFileName, (fileTime, fileTime))
+
+                print('Saved to {}'.format(fullFileName))
+            else:
+                print('Skipped. File already exists: {}'.format(fullFileName))
+
+    def sync(self, **args):
+        pass
+
+    def delete(self, pattern, **args):
+        pass
+
+
+getattr(Main(), args.op)(**vars(args))
+
