@@ -16,6 +16,11 @@ You can install via pip:
 pip install easysettings evernote
 
 
+Make alias or put into PATH environment:
+
+alias ensync="~/projects/remote.ensync/ensync"
+
+
 Sample:
 
 put this file into configured notebook.
