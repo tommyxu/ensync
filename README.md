@@ -33,7 +33,7 @@ alias ensync="~/projects/remote.ensync/ensync"
   ensync put README.txt
 ```
 
-* list all file
+* list all files
 
 ```bash
   ensync list
